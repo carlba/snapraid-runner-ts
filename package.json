@@ -1,18 +1,18 @@
 {
-  "name": "typescript-template",
+  "name": "snapraid-runner-ts",
   "description": "A short project description",
   "version": "0.0.1",
   "private": false,
   "license": "UNLICENSED",
   "type": "commonjs",
   "author": "carlba",
-  "homepage": "https://github.com/carlba/typescript-template",
+  "homepage": "https://github.com/carlba/snapraid-runner-ts",
   "bugs": {
-    "url": "https://github.com/carlba/typescript-template"
+    "url": "https://github.com/carlba/snapraid-runner-ts"
   },
   "repository": {
     "type": "git",
-    "url": "git@github.com:carlba/typescript-template"
+    "url": "git@github.com:carlba/snapraid-runner-ts"
   },
   "scripts": {
     "build": "tsc",

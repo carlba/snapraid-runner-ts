@@ -1,4 +1,4 @@
-# typescript-template
+# snapraid-runner-ts
 
 A template for a Typescript repository
 
