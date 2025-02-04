@@ -18,7 +18,7 @@ const containers: string[] = [
   'sonarr',
   'resilio-sync',
   'media-server-plextraktsync-1',
-  'media-server-grafana-1',
+  // 'media-server-grafana-1',
   'media-server-flexget-1',
 ];
 
