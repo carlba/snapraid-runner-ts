@@ -32,15 +32,18 @@ const DISABLE_CRON = process.env.DISABLE_CRON === 'true';
 let isRunning = false;
 const abortController = new AbortController();
 
-logger.info('ENV', {
-  PUSHOVER_TOKEN,
-  PUSHOVER_USER,
-  SCRUB_PERCENTAGE,
-  TIMEZONE,
-  CRON_SCHEDULE,
-  DISABLE_CRON,
-  PRETTIFY_LOGS,
-});
+logger.info(
+  {
+    PUSHOVER_TOKEN,
+    PUSHOVER_USER,
+    SCRUB_PERCENTAGE,
+    TIMEZONE,
+    CRON_SCHEDULE,
+    DISABLE_CRON,
+    PRETTIFY_LOGS,
+  },
+  'ENV'
+);
 
 createSymlink();
 
