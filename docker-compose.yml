@@ -1,0 +1,14 @@
+services:
+  snapraid:
+    build: .
+    environment:
+      - PUSHOVER_TOKEN=replace_me
+      - PUSHOVER_USER=replace_me
+      - PRETTIFY_LOGS=true
+      - DISABLE_CRON=true
+    volumes:
+      - /mnt:/mnt
+      - /opt/stacks/media-server/snapraid:/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    privileged: true

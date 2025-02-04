@@ -1,10 +1,16 @@
-const { exec, spawn } = require('child_process');
-const util = require('util');
-const execAsync = util.promisify(exec);
-const fs = require('fs');
-const cron = require('node-cron');
+import { exec } from 'child_process';
+import util from 'util';
 
-const containers = [
+import cron from 'node-cron';
+
+import type { ScheduledTask } from 'node-cron';
+import { createSymlink, panic, spawnAsync } from './utils';
+import { logger, PRETTIFY_LOGS } from './logger';
+import { sendPushoverNotification } from './pushover';
+
+const execAsync = util.promisify(exec);
+
+const containers: string[] = [
   'media-server-plex-1',
   'media-server-transmission-1',
   'bazarr',
@@ -16,211 +22,183 @@ const containers = [
   'media-server-flexget-1',
 ];
 
-const PUSHOVER_TOKEN = process.env.PUSHOVER_TOKEN;
-const PUSHOVER_USER = process.env.PUSHOVER_USER;
+const PUSHOVER_TOKEN = process.env.PUSHOVER_TOKEN ?? panic('PUSHOVER_TOKEN is required');
+const PUSHOVER_USER = process.env.PUSHOVER_USER ?? panic('PUSHOVER_USER is required');
 const SCRUB_PERCENTAGE = process.env.SCRUB_PERCENTAGE ?? '1';
 const TIMEZONE = process.env.TIMEZONE ?? 'America/Mexico_City';
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? '* * * * *';
+const DISABLE_CRON = process.env.DISABLE_CRON === 'true';
 
 let isRunning = false;
 const abortController = new AbortController();
 
-console.info('ENV', { PUSHOVER_TOKEN, PUSHOVER_USER, SCRUB_PERCENTAGE, TIMEZONE, CRON_SCHEDULE });
-
-const task = cron.schedule(
+logger.info('ENV', {
+  PUSHOVER_TOKEN,
+  PUSHOVER_USER,
+  SCRUB_PERCENTAGE,
+  TIMEZONE,
   CRON_SCHEDULE,
-  () => {
-    if (!isRunning) {
-      console.log('Running scheduled task');
-      isRunning = true;
-      manageContainers().finally(() => {
-        isRunning = false;
-      });
-    }
-  },
-  { timezone: TIMEZONE, scheduled: false }
-);
-
-const createSymlink = () => {
-  const target = '/etc/snapraid.conf';
-  const link = '/config/snapraid.conf';
-
-  fs.symlink(link, target, 'file', err => {
-    if (err) {
-      if (err.code === 'EEXIST') {
-        console.log('Symlink already exists');
-      } else {
-        console.error('Error creating symlink:', err);
-      }
-    } else {
-      console.log('Symlink created successfully');
-    }
-  });
-};
+  DISABLE_CRON,
+  PRETTIFY_LOGS,
+});
 
 createSymlink();
 
-const sendPushoverNotification = async message => {
-  try {
-    const title = 'Snapraid Sync';
-    const sound = 'pushover';
-
-    const response = await fetch('https://api.pushover.net/1/messages.json', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        token: PUSHOVER_TOKEN,
-        user: PUSHOVER_USER,
-        message,
-        title,
-        sound,
-        priority: 1,
-      }),
-    });
-    const data = await response.json();
-    console.log('Pushover notification sent:', data);
-  } catch (err) {
-    console.error('Error sending Pushover notification:', err);
-  }
-};
-
-const spawnAsync = (command, args = [], options = {}) => {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, options);
-    let stderr = '';
-    let stdout = '';
-    let output = '';
-
-    // Capture stderr
-    child.stderr.on('data', data => {
-      console.log(data.toString());
-      stderr += data.toString();
-      output += data.toString();
-    });
-
-    child.stdout.on('data', data => {
-      console.log(data.toString());
-      stdout += data.toString();
-      output += data.toString();
-    });
-
-    // Handle process close
-    child.on('exit', (code, signal) => {
-      if (abortController.signal.aborted) {
-        reject({
-          message: `Process was aborted ${abortController.signal.reason}`,
-          code,
-          stdout,
-          stderr,
-          output,
-        });
-      }
-      if (code === 0) {
-        resolve({ code, stdout, stderr, output });
-      } else {
-        reject({ code, stdout, stderr, output });
-      }
-    });
-
-    // Handle process errors
-    child.on('error', error => {
-      if (error.name === 'AbortError') {
-        console.error(`${error.message}: ${abortController.signal.reason}`);
-      } else {
-        console.error(`Error while running process ${error}`);
-      }
-    });
-  });
-};
-
-async function manageContainer(container, action, abort = false) {
+async function manageContainer(
+  container: string,
+  action: 'start' | 'stop',
+  abort = false
+): Promise<void> {
+  const localLogger = logger.child({ context: 'manageContainer' });
   if (!['start', 'stop'].includes(action)) {
     throw new Error(`${action} is not a valid container action`);
   }
   try {
-    const { stdout } = await execAsync(
+    await execAsync(
       `docker ${action} ${container}`,
       abort ? { signal: abortController.signal } : {}
     );
-    console.log(`Container ${container} ${action}ed successfully:`, stdout);
+    localLogger.info(`Container ${container} ${action}ed successfully`);
   } catch (error) {
-    throw new Error(
-      `Error while managing container ${error.message} ${error.stderr ?? ''} ${error.stdout ?? ''}`
-    );
+    const errorMessage = `Error while managing container ${container}`;
+    if (error instanceof Error) {
+      localLogger.error(error, errorMessage);
+
+      await sendPushoverNotification(
+        `${errorMessage} ${error.message}`,
+        PUSHOVER_TOKEN,
+        PUSHOVER_USER,
+        {
+          priority: 1,
+        }
+      );
+    }
+    throw new Error(errorMessage);
   }
 }
 
-async function snapraidSync() {
+async function snapraidSync(): Promise<{ output: string; code: number | null }> {
+  const localLogger = logger.child({ context: 'sync' });
+
   try {
-    const { output, code } = await spawnAsync('snapraid', ['sync'], {
+    return await spawnAsync('snapraid', ['sync'], {
       signal: abortController.signal,
     });
-    return { output, code };
   } catch (error) {
-    console.error('Error while syncing', error);
-    throw new Error(
-      `Error while syncing ${error.message} ${error.stderr ?? ''} ${error.stdout ?? ''}`
-    );
+    const errorMessage = 'Error while syncing';
+    if (error instanceof Error) {
+      localLogger.error(error, errorMessage);
+
+      await sendPushoverNotification(
+        `${errorMessage} ${error.message}`,
+        PUSHOVER_TOKEN,
+        PUSHOVER_USER,
+        {
+          priority: 1,
+        }
+      );
+    }
+    throw new Error(errorMessage);
   }
 }
 
-async function snapraidScrub() {
+async function snapraidScrub(): Promise<{ output: string; code: number | null }> {
+  const localLogger = logger.child({ context: 'scrub' });
   try {
     const { code, output } = await spawnAsync('snapraid', ['scrub', '-p', SCRUB_PERCENTAGE], {
       signal: abortController.signal,
     });
     return { output, code };
   } catch (error) {
-    console.error('Error while scrubbing', error);
-    throw new Error(
-      `Error while scrubbing ${error.message} ${error.stderr ?? ''} ${error.stdout ?? ''}`
-    );
-  }
-}
+    const errorMessage = 'Error while scrubbing';
+    if (error instanceof Error) {
+      localLogger.error(error, errorMessage);
 
-async function manageContainers() {
-  try {
-    for (const container of containers) {
-      if (abortController.signal.aborted) {
-        throw Error(abortController.signal.reason);
-      }
-      await manageContainer(container, 'stop', true);
-    }
-    const { output: syncOutput, syncCode } = await snapraidSync();
-    const { output: scrubOutput, scrubCode } = await snapraidScrub();
-
-    const combinedOutput = `Sync Output:\n${syncOutput}\nSync Code: ${syncCode}\nScrub Output:\n${scrubOutput}\nScrub Code: ${scrubCode}`;
-    await sendPushoverNotification(combinedOutput);
-  } catch (error) {
-    console.error(`${error.message} ${error.stdout ?? ''} ${error.stderr ?? ''}`);
-
-    await sendPushoverNotification(
-      `Message: ${error.message} ${error.stdout ? `Stdout: ${error.stdout}\n` : ''} ${
-        error.stderr ? `Stderr: ${error.stderr}\n` : ''
-      }`
-    );
-  } finally {
-    try {
-      for (const container of containers) {
-        await manageContainer(container, 'start', false);
-      }
-    } catch (error) {
-      console.error(
-        `Failed to recover after error due to ${error.message} ${error.stdout ?? ''} ${error.stderr ?? ''}`
+      await sendPushoverNotification(
+        `${errorMessage} ${error.message}`,
+        PUSHOVER_TOKEN,
+        PUSHOVER_USER,
+        {
+          priority: 1,
+        }
       );
     }
+    throw new Error(errorMessage);
   }
 }
 
-task.start();
+async function applyActionsToContainers(action: 'start' | 'stop') {
+  for (const container of containers) {
+    if (abortController.signal.aborted) {
+      throw new Error(String(abortController.signal.reason ?? 'aborted'));
+    }
+    await manageContainer(container, action, true);
+  }
+}
 
-// manageContainers().then();
+async function manageContainers(): Promise<void> {
+  const localLogger = logger.child({ context: 'manageContainers' });
+  try {
+    await applyActionsToContainers('stop');
+    await snapraidSync();
+    localLogger.info('Successfully synced Snapraid');
+    await sendPushoverNotification('Successfully synced Snapraid', PUSHOVER_TOKEN, PUSHOVER_USER);
+    await snapraidScrub();
+    await sendPushoverNotification('Successfully scrubbed Snapraid', PUSHOVER_TOKEN, PUSHOVER_USER);
+    localLogger.info('Successfully scrubbed Snapraid');
+  } catch (error) {
+    logger.error(error);
+  } finally {
+    try {
+      await applyActionsToContainers('start');
+    } catch {
+      localLogger.error(`Failed to recover after error`);
+    }
+  }
+}
 
-function handleSignal(signal) {
+let task: null | ScheduledTask = null;
+
+if (!DISABLE_CRON) {
+  task = cron.schedule(
+    CRON_SCHEDULE,
+    () => {
+      if (!isRunning) {
+        const localLogger = logger.child({ context: 'cron' });
+        localLogger.info('Running scheduled task');
+        isRunning = true;
+        manageContainers()
+          .catch(error => {
+            localLogger.error(error, 'Error in scheduled task');
+          })
+          .finally(() => {
+            isRunning = false;
+            localLogger.info('Ending scheduled task');
+          });
+      }
+    },
+    { timezone: TIMEZONE, scheduled: false }
+  );
+
+  task.start();
+} else {
+  const localLogger = logger.child({ context: 'cli' });
+  localLogger.info('Starting run');
+  manageContainers()
+    .catch(error => {
+      localLogger.error(error, 'Error in scheduled task');
+    })
+    .finally(() => {
+      localLogger.info('Ending run');
+      isRunning = false;
+    });
+}
+
+function handleSignal(signal: string): void {
   abortController.abort(`Parent process was stopped ${signal}`);
-  task.stop();
+  if (task) {
+    task.stop();
+  }
 }
 
 process.on('SIGINT', () => handleSignal('SIGINT'));
