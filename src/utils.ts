@@ -86,3 +86,13 @@ export function panic(message: string): never {
   logger.error(message);
   process.exit(0);
 }
+
+export const parseCommaSeparatedEnvVar = (
+  envVariable: string | undefined | null,
+  name: string
+): string[] => {
+  if (!envVariable) {
+    throw new Error(`${name} required`);
+  }
+  return envVariable.split(',').map(item => item.trim());
+};

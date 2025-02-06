@@ -4,23 +4,11 @@ import util from 'util';
 import cron from 'node-cron';
 
 import type { ScheduledTask } from 'node-cron';
-import { createSymlink, panic, spawnAsync } from './utils';
+import { createSymlink, panic, parseCommaSeparatedEnvVar, spawnAsync } from './utils';
 import { logger, PRETTIFY_LOGS } from './logger';
 import { sendPushoverNotification } from './pushover';
 
 const execAsync = util.promisify(exec);
-
-const containers: string[] = [
-  'media-server-plex-1',
-  'media-server-transmission-1',
-  'bazarr',
-  'radarr',
-  'sonarr',
-  'resilio-sync',
-  'media-server-plextraktsync-1',
-  // 'media-server-grafana-1',
-  'media-server-flexget-1',
-];
 
 const PUSHOVER_TOKEN = process.env.PUSHOVER_TOKEN ?? panic('PUSHOVER_TOKEN is required');
 const PUSHOVER_USER = process.env.PUSHOVER_USER ?? panic('PUSHOVER_USER is required');
@@ -28,6 +16,7 @@ const SCRUB_PERCENTAGE = process.env.SCRUB_PERCENTAGE ?? '1';
 const TIMEZONE = process.env.TIMEZONE ?? 'America/Mexico_City';
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE ?? '* * * * *';
 const DISABLE_CRON = process.env.DISABLE_CRON === 'true';
+const CONTAINERS = parseCommaSeparatedEnvVar(process.env.CONTAINERS, 'CONTAINERS');
 
 let isRunning = false;
 const abortController = new AbortController();
@@ -131,7 +120,7 @@ async function snapraidScrub(): Promise<{ output: string; code: number | null }>
 }
 
 async function applyActionsToContainers(action: 'start' | 'stop') {
-  for (const container of containers) {
+  for (const container of CONTAINERS) {
     if (abortController.signal.aborted) {
       throw new Error(String(abortController.signal.reason ?? 'aborted'));
     }
