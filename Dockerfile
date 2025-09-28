@@ -15,7 +15,8 @@ RUN apk add --no-cache \
     libc-dev \
     make \
     bash \
-    docker-cli
+    docker-cli \
+    smartmontools
 
 RUN apk add --no-cache \
     wget \
